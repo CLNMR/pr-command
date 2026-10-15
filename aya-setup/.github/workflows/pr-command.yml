@@ -12,8 +12,10 @@ on:
       instruction:
         description: What the Claude session should do
         required: true
-  # "Mergeable" button in the app adds the ready-to-merge label.
-  pull_request:
+  # "Mergeable" button in the app adds the ready-to-merge label. pull_request_target, because
+  # GitHub skips pull_request workflows for PRs with merge conflicts, which are exactly the ones
+  # the merge agent has to fix. It runs the workflow from the default branch, never from the PR.
+  pull_request_target:
     types: [labeled]
   # Re-check queued PRs when CI finishes. List this repo's CI workflow names here.
   workflow_run:
@@ -51,7 +53,7 @@ jobs:
     if: >-
       github.event_name == 'schedule' || github.event_name == 'push' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') ||
-      (github.event_name == 'pull_request' && github.event.label.name == 'ready-to-merge')
+      (github.event_name == 'pull_request_target' && github.event.label.name == 'ready-to-merge')
     concurrency:
       group: pr-command-merge-${{ github.repository }}
     uses: univelop/.github/.github/workflows/pr-command-merge.yml@main

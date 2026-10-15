@@ -234,15 +234,16 @@ jobs:
           git config user.name "claude[bot]"
           git config user.email "41898282+claude[bot]@users.noreply.github.com"
 
+      # The Claude Code CLI instead of claude-code-action: the action refuses some events (e.g. push,
+      # which is how most scans after a base-branch change start) and hides Claude's output, including
+      # errors such as an invalid token or a usage limit.
       - name: Claude merge agent
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.PR_COMMAND_TOKEN }}
-          claude_args: --max-turns 150 --allowedTools Bash,Read,Edit,MultiEdit,Write,Glob,Grep,TodoWrite
-          prompt: |
+        timeout-minutes: 50
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PROMPT: |
             You are the merge agent for pull request #${{ matrix.pr }} in ${{ github.repository }}.
             The repository is checked out on the PR's head branch. The PR author marked this PR as
             ready to merge, but it cannot be merged yet:
@@ -273,6 +274,12 @@ jobs:
             decision, credentials you don't have, or a conflict that cannot be resolved without changing what the
             PR does. In that case the summary must explain the problem precisely for a human, as a few bullet points.
             Otherwise summarize what you changed in two or three bullet points.
+        run: |
+          set -o pipefail
+          npm install --global --silent @anthropic-ai/claude-code
+          claude -p "$PROMPT" --max-turns 150 \
+            --allowedTools Bash,Read,Edit,MultiEdit,Write,Glob,Grep,TodoWrite \
+            2>&1 | tee "$RUNNER_TEMP/claude-output.txt"
 
       - name: Report
         if: always()
@@ -303,10 +310,8 @@ jobs:
           if [ -n "$summary" ]; then
             printf '🤖 Merge agent (%s):\n\n%s\n' "$status" "$summary" | gh pr comment "$N" --repo "$R" --body-file -
           else
-            # claude-code-action hides Claude's output; its last message holds the error (e.g. an invalid
-            # token or a usage limit), so surface that instead of a bare "failed".
-            error=$(jq -r 'if type == "array" then (map(select(.type == "result")) | last | .result // empty) else empty end' \
-              "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null | head -c 600 || true)
+            # The end of Claude's output says why (e.g. an invalid token or a usage limit).
+            error=$(tail -c 600 "$RUNNER_TEMP/claude-output.txt" 2>/dev/null || true)
             {
               printf '🤖 Merge agent finished without a result (step outcome: %s). It will be retried. [Workflow run](%s)\n' "$OUTCOME" "$RUN_URL"
               [ -z "$error" ] || printf '\n> Claude: %s\n' "$(tr '\n' ' ' <<<"$error")"

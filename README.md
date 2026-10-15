@@ -9,7 +9,7 @@ Browser (Firebase Hosting)                GitHub                                
 ───────────────────────────               ──────────────────────────────          ─────────────────────
 list / detail  ── GraphQL/REST ──────────▶ PRs, labels, comments
 Close (x)      ── close PR ──────────────▶
-Mergeable (m)  ── auto-merge + label ────▶ pr-command.yml ─▶ merge workflow ───▶ claude-code-action
+Mergeable (m)  ── auto-merge + label ────▶ pr-command.yml ─▶ merge workflow ───▶ Claude Code CLI
                                                                                    (headless, fixes + pushes)
 Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶ session workflow ─▶ routine /fire
                ◀─ session link (PR comment marker) ─────────────────────────────  claude.ai/code session

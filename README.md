@@ -54,6 +54,7 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
 | `a` | Start a Claude session (`⌘↵` sends) |
 | `o` | Open on GitHub |
 | `s` | Open the latest Claude session |
+| `g` | Open the latest merge agent run |
 | `r` | Refresh |
 | `,` | Choose repos |
 | `Esc` | Back to the list (phone) |

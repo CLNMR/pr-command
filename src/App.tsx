@@ -220,6 +220,7 @@ function Main({onSignOut}: {onSignOut: () => void}) {
             Escape: () => narrow && select(null),
             ...(canMerge ? {m: () => decide(selected, 'queued')} : {}),
             ...(selected.sessions[0] ? {s: () => window.open(selected.sessions[0].url, '_blank', 'noreferrer')} : {}),
+            ...(selected.mergeRuns[0] ? {g: () => window.open(selected.mergeRuns[0].url, '_blank', 'noreferrer')} : {}),
           }
         : {}),
     },

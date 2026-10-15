@@ -77,6 +77,7 @@ export interface PR {
   autoMerge: boolean
   status: PRStatus
   sessions: Session[]
+  mergeRuns: Session[] // merge agent workflow runs, newest first
   sessionError: {at: string; body: string} | null
 }
 
@@ -98,6 +99,8 @@ export interface Viewer {
 
 const SESSION_RE = /<!-- pr-command:session (\{.*?\}) -->/
 const SESSION_ERROR = '<!-- pr-command:session-error -->'
+const MERGE_ATTEMPT = '<!-- pr-command:merge-attempt -->'
+const RUN_LINK_RE = /\[Workflow run\]\((https:\/\/[^)\s]+)\)/
 const WARNING_BLOCK_RE = /<!-- pr-command:warning:start -->[\s\S]*?<!-- pr-command:warning:end -->\s*/g
 
 function deriveStatus(labels: string[]): PRStatus {
@@ -145,6 +148,7 @@ interface RawPR {
 function toPR(raw: RawPR): PR {
   const labels = raw.labels.nodes
   const sessions: Session[] = []
+  const mergeRuns: Session[] = []
   let sessionError: PR['sessionError'] = null
   for (const c of raw.comments.nodes) {
     const m = c.body.match(SESSION_RE)
@@ -155,11 +159,15 @@ function toPR(raw: RawPR): PR {
       } catch {
         // malformed marker
       }
+    } else if (c.body.includes(MERGE_ATTEMPT)) {
+      const run = c.body.match(RUN_LINK_RE)
+      if (run) mergeRuns.push({url: run[1], at: c.createdAt})
     } else if (c.body.includes(SESSION_ERROR)) {
       sessionError = {at: c.createdAt, body: c.body.replace(SESSION_ERROR, '').trim()}
     }
   }
   sessions.reverse() // newest first
+  mergeRuns.reverse()
   if (sessionError && sessions[0] && sessions[0].at > sessionError.at) sessionError = null
   let status = deriveStatus(labels.map(l => l.name))
   // The last session failed to start: nothing is running, so the PR needs a decision again.
@@ -187,6 +195,7 @@ function toPR(raw: RawPR): PR {
     autoMerge: Boolean(raw.autoMergeRequest),
     status,
     sessions,
+    mergeRuns,
     sessionError,
   }
 }

@@ -6,6 +6,8 @@ import {
   DependabotIcon,
   GitCommitIcon,
   LinkExternalIcon,
+  PlayIcon,
+  SyncIcon,
   XIcon,
 } from '@primer/octicons-react'
 import {fetchCommits, type PR} from '../github'
@@ -35,6 +37,7 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
   })
   const status = STATUS_LABEL[pr.status]
   const latestSession = pr.sessions[0]
+  const latestMergeRun = pr.mergeRuns[0]
   const decided = pr.status === 'queued' || pr.status === 'merge-agent'
 
   return (
@@ -82,6 +85,11 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
               Session
             </KbdButton>
           )}
+          {latestMergeRun && (
+            <KbdButton hotkey="g" leadingVisual={PlayIcon} href={latestMergeRun.url} target="_blank" rel="noreferrer">
+              Merge run
+            </KbdButton>
+          )}
         </div>
       </header>
 
@@ -111,6 +119,18 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
               {pr.sessions.slice(0, 5).map(s => (
                 <a key={s.url} className="session-row" href={s.url} target="_blank" rel="noreferrer">
                   <DependabotIcon /> <RelativeTime date={new Date(s.at)} /> <LinkExternalIcon size={12} />
+                </a>
+              ))}
+            </section>
+          )}
+
+          {pr.mergeRuns.length > 0 && (
+            <section className="panel">
+              <h2 className="panel-heading">Merge agent runs</h2>
+              {pr.mergeRuns.slice(0, 3).map((r, i) => (
+                <a key={r.url + r.at} className="session-row" href={r.url} target="_blank" rel="noreferrer">
+                  {i === 0 && pr.status === 'merge-agent' ? <SyncIcon className="spin" /> : <PlayIcon />}{' '}
+                  <RelativeTime date={new Date(r.at)} /> <LinkExternalIcon size={12} />
                 </a>
               ))}
             </section>

@@ -303,7 +303,14 @@ jobs:
           if [ -n "$summary" ]; then
             printf '🤖 Merge agent (%s):\n\n%s\n' "$status" "$summary" | gh pr comment "$N" --repo "$R" --body-file -
           else
-            printf '🤖 Merge agent finished without a result (step outcome: %s). It will be retried. [Workflow run](%s)\n' "$OUTCOME" "$RUN_URL" \
-              | gh pr comment "$N" --repo "$R" --body-file -
+            # claude-code-action hides Claude's output; its last message holds the error (e.g. an invalid
+            # token or a usage limit), so surface that instead of a bare "failed".
+            error=$(jq -r 'if type == "array" then (map(select(.type == "result")) | last | .result // empty) else empty end' \
+              "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null | head -c 600 || true)
+            {
+              printf '🤖 Merge agent finished without a result (step outcome: %s). It will be retried. [Workflow run](%s)\n' "$OUTCOME" "$RUN_URL"
+              [ -z "$error" ] || printf '\n> Claude: %s\n' "$(tr '\n' ' ' <<<"$error")"
+            } | gh pr comment "$N" --repo "$R" --body-file -
+            [ -z "$error" ] || echo "::error::Claude: $error"
           fi
           gh pr merge "$N" --repo "$R" --auto "--$METHOD" >/dev/null 2>&1 || true

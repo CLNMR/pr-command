@@ -58,6 +58,41 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
 | `,` | Choose repos |
 | `Esc` | Back to the list (phone) |
 
+## Use it for your own org
+
+This repo is set up for `univelop/aya`. To run your own copy:
+
+1. **Fork or clone** this repo and run `npm install`.
+2. **Firebase:** create your own project (the free Spark plan is enough), then run
+   `npx firebase login` and `npx firebase use --add`. This replaces the project in `.firebaserc`.
+   Follow [step 1](#1-firebase-hosting-and-github-login) for the GitHub login. The OAuth app's
+   callback URL is `https://<project-id>.firebaseapp.com/__/auth/handler`.
+3. **App config:** `cp .env.example .env.local`. Fill in your Firebase web config and set
+   `VITE_GITHUB_ORG` to your org. Set `VITE_REPOS` to the repos to show by default, and
+   `VITE_MERGE_METHOD` to your merge method. Then run `npm run deploy`.
+4. **Workflows:** copy [`github-workflows/`](github-workflows) into your org's `.github` repo.
+   In `workflow-templates/pr-command.yml`, replace `univelop/.github` in both `uses:` lines with
+   `<your-org>/.github`. If that repo is private, allow other repos to use its workflows: Settings
+   → Actions → General → Access → "Accessible from repositories in the organization".
+5. **Each repo** you want to manage gets the stub (see [step 4](#4-each-repo)).
+   [`aya-setup/`](aya-setup/.github/workflows/pr-command.yml) is a filled-in example. Change
+   `allowed_users` to your GitHub login, and list your repo's CI workflow names under
+   `workflow_run`.
+6. **Secrets and routine:** add the three secrets ([step 3](#3-secrets-org-level-or-repo-level-while-only-aya-uses-it))
+   and create the claude.ai routine ([step 5](#5-routines-claudeaicoderoutines)).
+7. **First sign-in:** grant the OAuth app access to your org on GitHub's consent screen. If your
+   org restricts OAuth apps, an org owner then approves it under Settings → Third-party access.
+
+Things to watch for:
+
+- `PR_COMMAND_TOKEN` must be a fine-grained PAT whose resource owner is the **org**, not your
+  user, with the repos selected. Orgs that require approval for fine-grained tokens return
+  404 until an owner approves it.
+- Fine-grained PATs cannot read check runs. The workflows use the built-in `GITHUB_TOKEN` for
+  that, so keep `checks: read` and `statuses: read` in the stub's `permissions`.
+- Without **Allow auto-merge** on the repo, everything still works. PRs are then merged by the
+  workflow after CI finishes, instead of by GitHub the moment CI turns green.
+
 ## Setup
 
 ### 1. Firebase (hosting and GitHub login)

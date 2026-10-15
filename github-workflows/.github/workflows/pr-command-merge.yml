@@ -1,0 +1,309 @@
+# Merges PRs labeled "ready-to-merge". Clean PRs are merged (or left to native
+# auto-merge while checks run). PRs with conflicts or failing checks get a headless
+# Claude Code agent (subscription via CLAUDE_CODE_OAUTH_TOKEN). After MAX_ATTEMPTS, or
+# when the agent gives up, the PR gets "needs-attention" and a WARNING block at the top
+# of its description.
+#
+# Secrets (org level): CLAUDE_CODE_OAUTH_TOKEN (claude setup-token), PR_COMMAND_TOKEN
+# (fine-grained PAT or GitHub App token with contents/pull-requests/issues/actions write;
+# needed so pushes and merges trigger the repos' other workflows).
+name: PR Command – merge
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: Single PR number to check; empty = all PRs labeled ready-to-merge
+        type: string
+        default: ''
+      merge_method:
+        description: squash | merge | rebase
+        type: string
+        default: squash
+      max_attempts:
+        type: number
+        default: 2
+      allowed_users:
+        description: Comma-separated PR authors whose PRs the merge agent works on (it runs on their subscription)
+        type: string
+        required: true
+      human_checks:
+        description: Comma-separated check names only a human can satisfy (e.g. review gates); the agent ignores them
+        type: string
+        default: ''
+
+env:
+  READY: ready-to-merge
+  ATTENTION: needs-attention
+  AGENT: merge-agent-running
+  SELF_WORKFLOW: PR Command
+  HUMAN_CHECKS: ${{ inputs.human_checks }}
+  ALLOWED_USERS: ${{ inputs.allowed_users }}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      fix: ${{ steps.scan.outputs.fix }}
+    steps:
+      - name: Require PR_COMMAND_TOKEN
+        env:
+          HAS_TOKEN: ${{ secrets.PR_COMMAND_TOKEN != '' }}
+        run: |
+          # Pushes and merges made with GITHUB_TOKEN don't trigger other workflows: CI would never run on
+          # the agent's fix commits, and without required checks the PR would then look clean and be
+          # merged untested. So no token, no merging.
+          if [ "$HAS_TOKEN" != true ]; then
+            echo "::error::Secret PR_COMMAND_TOKEN is missing. See the PR Command README."
+            exit 1
+          fi
+
+      - id: scan
+        env:
+          GH_TOKEN: ${{ secrets.PR_COMMAND_TOKEN }}
+          # Fine-grained PATs cannot read check runs; the workflow token can (checks: read).
+          CHECKS_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          METHOD: ${{ inputs.merge_method }}
+          MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+        run: |
+          set -euo pipefail
+          R="$GITHUB_REPOSITORY"
+
+          gh label create "$READY" --repo "$R" --color 1f883d --description "PR Command: merge when possible" --force >/dev/null
+          gh label create "$ATTENTION" --repo "$R" --color d1242f --description "PR Command: merge agent gave up" --force >/dev/null
+          gh label create "$AGENT" --repo "$R" --color bf8700 --description "PR Command: merge agent is working" --force >/dev/null
+
+          attention() {
+            local n=$1 reason=$2 body stripped
+            body=$(gh pr view "$n" --repo "$R" --json body --jq .body)
+            stripped=$(perl -0pe 's/<!-- pr-command:warning:start -->.*?<!-- pr-command:warning:end -->\s*//gs' <<<"$body")
+            {
+              printf '<!-- pr-command:warning:start -->\n> [!CAUTION]\n> ## ⚠️ WARNING: this PR could not be merged automatically\n>\n'
+              sed 's/^/> /' <<<"$reason"
+              printf '\n<!-- pr-command:warning:end -->\n\n%s\n' "$stripped"
+            } > "$RUNNER_TEMP/body.md"
+            gh pr merge "$n" --repo "$R" --disable-auto >/dev/null 2>&1 || true
+            gh pr edit "$n" --repo "$R" --body-file "$RUNNER_TEMP/body.md" --add-label "$ATTENTION" --remove-label "$READY"
+            echo "::warning::#$n needs attention"
+          }
+
+          ensure_auto() {
+            [ "$(jq -r '.autoMergeRequest != null' <<<"$1")" = true ] && return 0
+            gh pr merge "$2" --repo "$R" --auto "--$METHOD" >/dev/null 2>&1 || true
+          }
+
+          if [ -n "$PR" ]; then
+            prs="$PR"
+          else
+            prs=$(gh pr list --repo "$R" --label "$READY" --state open --limit 100 --json number --jq '.[].number')
+          fi
+
+          fix=()
+          for n in $prs; do
+            d=$(GH_TOKEN="$CHECKS_TOKEN" gh pr view "$n" --repo "$R" --json author,state,isDraft,mergeable,mergeStateStatus,labels,statusCheckRollup,autoMergeRequest)
+            [ "$(jq -r .state <<<"$d")" = OPEN ] || continue
+            author=$(jq -r .author.login <<<"$d")
+            if [[ ",${ALLOWED_USERS// /}," != *",$author,"* ]]; then
+              echo "#$n: author @$author is not in allowed_users, skipping"
+              continue
+            fi
+            labels=",$(jq -r '[.labels[].name] | join(",")' <<<"$d"),"
+            [[ "$labels" == *",$READY,"* ]] || continue
+            [[ "$labels" == *",$ATTENTION,"* || "$labels" == *",$AGENT,"* ]] && continue
+
+            if [ "$(jq -r .isDraft <<<"$d")" = true ]; then
+              gh pr ready "$n" --repo "$R"
+              continue
+            fi
+
+            mergeable=$(jq -r .mergeable <<<"$d")
+            state=$(jq -r .mergeStateStatus <<<"$d")
+            human=$(jq -r '(env.HUMAN_CHECKS | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $h
+              | [.statusCheckRollup[]? | select((.name // .context) | IN($h[]))
+                 | select(((.conclusion // "") | IN("SUCCESS","NEUTRAL","SKIPPED")) or ((.state // "") == "SUCCESS") | not)
+                 | (.name // .context)] | join(", ")' <<<"$d")
+            failing=$(jq -r '(env.HUMAN_CHECKS | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $h
+              | [.statusCheckRollup[]?
+              | select((.workflowName // "") != env.SELF_WORKFLOW)
+              | select((.name // .context) | IN($h[]) | not)
+              | select(((.conclusion // "") | IN("FAILURE","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE"))
+                       or ((.state // "") | IN("FAILURE","ERROR")))
+              | (.name // .context)] | join(", ")' <<<"$d")
+            pending=$(jq -r '(env.HUMAN_CHECKS | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $h
+              | [.statusCheckRollup[]?
+              | select((.workflowName // "") != env.SELF_WORKFLOW)
+              | select((.name // .context) | IN($h[]) | not)
+              | select((.__typename == "CheckRun" and .status != "COMPLETED")
+                       or ((.state // "") | IN("PENDING","EXPECTED")))] | length' <<<"$d")
+            echo "#$n mergeable=$mergeable state=$state failing=[$failing] pending=$pending human=[$human]"
+
+            [ "$mergeable" = UNKNOWN ] && continue
+
+            needs_agent=false
+            if [ "$mergeable" = CONFLICTING ] || [ -n "$failing" ]; then
+              needs_agent=true
+            elif [ "$pending" -gt 0 ]; then
+              ensure_auto "$d" "$n"
+              continue
+            else
+              case "$state" in
+                BEHIND)
+                  gh pr update-branch "$n" --repo "$R" || needs_agent=true ;;
+                CLEAN|HAS_HOOKS|UNSTABLE)
+                  gh pr merge "$n" --repo "$R" "--$METHOD" || ensure_auto "$d" "$n" ;;
+                BLOCKED)
+                  if [ -n "$human" ]; then
+                    attention "$n" "Code checks are green and there are no conflicts, but these checks need a human: **$human** (e.g. a required review)."
+                  else
+                    attention "$n" "Checks are green and there are no conflicts, but branch protection still blocks the merge (most likely a required review, or a required check that never ran for the latest commit). This needs a human."
+                  fi ;;
+                DIRTY)
+                  needs_agent=true ;;
+              esac
+            fi
+            [ "$needs_agent" = true ] || continue
+
+            # Attempts since the PR was (last) labeled ready-to-merge.
+            labeled_at=$(gh api "repos/$R/issues/$n/events" --paginate \
+              --jq "[.[] | select(.event == \"labeled\" and .label.name == \"$READY\") | .created_at] | last // empty" | tail -n1)
+            attempts=$(gh api "repos/$R/issues/$n/comments" --paginate \
+              --jq "[.[] | select(.created_at > \"${labeled_at:-0}\" and (.body | contains(\"<!-- pr-command:merge-attempt -->\")))] | length" \
+              | awk '{s += $1} END {print s + 0}')
+            if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
+              attention "$n" "The merge agent tried $attempts times and the PR is still not mergeable.
+          - Conflicts: $([ "$mergeable" = CONFLICTING ] && echo yes || echo no)
+          - Failing checks: ${failing:-none}
+          - Merge state: $state
+
+          See the agent's comments below for what it tried."
+              continue
+            fi
+            fix+=("$n")
+          done
+
+          echo "fix=$(printf '%s\n' "${fix[@]}" | jq -R 'select(length > 0) | tonumber' | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  fix:
+    needs: scan
+    if: needs.scan.outputs.fix != '[]' && needs.scan.outputs.fix != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        pr: ${{ fromJSON(needs.scan.outputs.fix) }}
+    concurrency:
+      group: pr-command-fix-${{ github.repository }}-${{ matrix.pr }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.PR_COMMAND_TOKEN }}
+      # Fine-grained PATs cannot read check runs; the workflow token can (checks: read).
+      CHECKS_TOKEN: ${{ github.token }}
+      N: ${{ matrix.pr }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - id: pr
+        name: Claim PR
+        run: |
+          set -euo pipefail
+          R="$GITHUB_REPOSITORY"
+          gh pr edit "$N" --repo "$R" --add-label "$AGENT"
+          d=$(GH_TOKEN="$CHECKS_TOKEN" gh pr view "$N" --repo "$R" --json title,headRefName,baseRefName,mergeable,mergeStateStatus,statusCheckRollup)
+          echo "head=$(jq -r .headRefName <<<"$d")" >> "$GITHUB_OUTPUT"
+          echo "base=$(jq -r .baseRefName <<<"$d")" >> "$GITHUB_OUTPUT"
+          {
+            echo 'context<<PR_COMMAND_EOF'
+            jq -r '"- Title: \(.title)\n- Head branch: \(.headRefName)\n- Base branch: \(.baseRefName)\n- Mergeable: \(.mergeable), merge state: \(.mergeStateStatus)\n- Failing checks: " +
+              ((env.HUMAN_CHECKS | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $h | [.statusCheckRollup[]? | select((.name // .context) | IN($h[]) | not) | select(((.conclusion // "") | IN("FAILURE","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE")) or ((.state // "") | IN("FAILURE","ERROR"))) | "\(.name // .context) (\(.detailsUrl // .targetUrl // "no link"))"] | join("; ") | if . == "" then "none" else . end)' <<<"$d"
+            echo 'PR_COMMAND_EOF'
+          } >> "$GITHUB_OUTPUT"
+          printf '<!-- pr-command:merge-attempt -->\n🤖 Merge agent is trying to make this PR mergeable. [Workflow run](%s)\n' "$RUN_URL" \
+            | gh pr comment "$N" --repo "$R" --body-file -
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.pr.outputs.head }}
+          fetch-depth: 0
+          token: ${{ secrets.PR_COMMAND_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "claude[bot]"
+          git config user.email "41898282+claude[bot]@users.noreply.github.com"
+
+      - name: Claude merge agent
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.PR_COMMAND_TOKEN }}
+          claude_args: --max-turns 150 --allowedTools Bash,Read,Edit,MultiEdit,Write,Glob,Grep,TodoWrite
+          prompt: |
+            You are the merge agent for pull request #${{ matrix.pr }} in ${{ github.repository }}.
+            The repository is checked out on the PR's head branch. The PR author marked this PR as
+            ready to merge, but it cannot be merged yet:
+
+            ${{ steps.pr.outputs.context }}
+
+            Make this PR mergeable without asking anyone, keeping the PR's intent intact.
+
+            1. Conflicts: `git fetch origin ${{ steps.pr.outputs.base }}` and `git merge origin/${{ steps.pr.outputs.base }}`,
+               then resolve the conflicts so that both the PR's change and the base branch's changes survive.
+               Never rebase and never force-push. Commit and push the merge as soon as the conflicts are
+               resolved: do NOT run the full CI, test suite or build locally first (even if the repository's
+               instructions say so). CI runs on GitHub after the push anyway; at most run a quick check on
+               the files you touched.
+            2. Failing checks: inspect them (`GH_TOKEN=$CHECKS_TOKEN gh pr checks ${{ matrix.pr }}`, `gh run list --branch <head>`,
+               `gh run view <id> --log-failed`) and fix the root cause. Locally, run only the specific failing
+               test, lint or type check to verify your fix, never the whole CI; GitHub re-runs CI after the push.
+            3. If a failure is clearly unrelated to this PR and flaky (infrastructure, timeouts, rate limits),
+               re-run it with `gh run rerun <id> --failed` instead of changing code.
+            4. Never disable, skip, weaken or delete tests or checks, never edit CI configuration to hide a
+               failure, never push to ${{ steps.pr.outputs.base }}.
+            5. Commit with clear messages and push to the head branch: `git push origin HEAD:${{ steps.pr.outputs.head }}`.
+            6. Do not merge the PR yourself. It is merged automatically once all checks are green.
+
+            Finally, write a JSON file to ${{ runner.temp }}/merge-result.json:
+            {"status": "fixed" | "rerun" | "give_up", "summary": "<markdown>"}
+            Use "give_up" only if you really cannot make the PR mergeable, for example because it needs a product
+            decision, credentials you don't have, or a conflict that cannot be resolved without changing what the
+            PR does. In that case the summary must explain the problem precisely for a human, as a few bullet points.
+            Otherwise summarize what you changed in two or three bullet points.
+
+      - name: Report
+        if: always()
+        env:
+          METHOD: ${{ inputs.merge_method }}
+          RESULT: ${{ runner.temp }}/merge-result.json
+          OUTCOME: ${{ steps.claude.outcome }}
+        run: |
+          set -uo pipefail
+          R="$GITHUB_REPOSITORY"
+          status=$(jq -r '.status // empty' "$RESULT" 2>/dev/null || true)
+          summary=$(jq -r '.summary // empty' "$RESULT" 2>/dev/null || true)
+          gh pr edit "$N" --repo "$R" --remove-label "$AGENT" || true
+
+          if [ "$status" = give_up ]; then
+            body=$(gh pr view "$N" --repo "$R" --json body --jq .body)
+            stripped=$(perl -0pe 's/<!-- pr-command:warning:start -->.*?<!-- pr-command:warning:end -->\s*//gs' <<<"$body")
+            {
+              printf '<!-- pr-command:warning:start -->\n> [!CAUTION]\n> ## ⚠️ WARNING: this PR could not be merged automatically\n>\n'
+              sed 's/^/> /' <<<"$summary"
+              printf '>\n> [Merge agent run](%s)\n<!-- pr-command:warning:end -->\n\n%s\n' "$RUN_URL" "$stripped"
+            } > "$RUNNER_TEMP/body.md"
+            gh pr merge "$N" --repo "$R" --disable-auto >/dev/null 2>&1 || true
+            gh pr edit "$N" --repo "$R" --body-file "$RUNNER_TEMP/body.md" --add-label "$ATTENTION" --remove-label "$READY"
+            exit 0
+          fi
+
+          if [ -n "$summary" ]; then
+            printf '🤖 Merge agent (%s):\n\n%s\n' "$status" "$summary" | gh pr comment "$N" --repo "$R" --body-file -
+          else
+            printf '🤖 Merge agent finished without a result (step outcome: %s). It will be retried. [Workflow run](%s)\n' "$OUTCOME" "$RUN_URL" \
+              | gh pr comment "$N" --repo "$R" --body-file -
+          fi
+          gh pr merge "$N" --repo "$R" --auto "--$METHOD" >/dev/null 2>&1 || true

@@ -1,0 +1,6 @@
+{
+  "name": "PR Command",
+  "description": "Claude sessions and auto-merge for PRs managed in the PR Command app.",
+  "iconName": "octicon git-pull-request",
+  "categories": ["Automation"]
+}

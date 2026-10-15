@@ -1,0 +1,92 @@
+# Starts a Claude Code session in claude.ai/code on a PR branch by firing the repo's
+# routine, then posts the session link on the PR (read back by the PR Command app).
+#
+# Org secret CLAUDE_ROUTINES (JSON): {"<repo>": {"id": "trig_…", "token": "sk-ant-oat01-…"}, "*": {…}}
+# "*" is the fallback routine for repos without their own entry.
+name: PR Command – session
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        type: string
+        required: true
+      instruction:
+        type: string
+        required: true
+      allowed_users:
+        description: Comma-separated GitHub logins allowed to start sessions (they run on the routine owner's subscription)
+        type: string
+        required: true
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fire routine
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROUTINES: ${{ secrets.CLAUDE_ROUTINES }}
+          PR: ${{ inputs.pr }}
+          INSTRUCTION: ${{ inputs.instruction }}
+          ALLOWED_USERS: ${{ inputs.allowed_users }}
+          ACTOR: ${{ github.triggering_actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          repo_name="${GITHUB_REPOSITORY#*/}"
+
+          fail() {
+            printf '<!-- pr-command:session-error -->\n%s\n\n[Workflow run](%s)\n' "$1" "$RUN_URL" \
+              | gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file -
+            echo "::error::$1"
+            exit 1
+          }
+
+          [[ "$PR" =~ ^[0-9]+$ ]] || fail "Invalid PR number"
+          [[ ",${ALLOWED_USERS// /}," == *",$ACTOR,"* ]] || fail "@$ACTOR is not allowed to start Claude sessions in this repo."
+          routines="${ROUTINES:-}"
+          [ -n "$routines" ] || routines='{}'
+          routine=$(jq -c --arg r "$repo_name" '.[$r] // .["*"] // empty' <<<"$routines" 2>/dev/null || true)
+          [ -n "$routine" ] || fail "No routine configured for $repo_name in the CLAUDE_ROUTINES secret."
+          routine_id=$(jq -r .id <<<"$routine")
+          routine_token=$(jq -r .token <<<"$routine")
+          echo "::add-mask::$routine_token"
+
+          pr_json=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title,url,headRefName,baseRefName,state)
+          [ "$(jq -r .state <<<"$pr_json")" = "OPEN" ] || fail "PR #$PR is not open."
+
+          text=$(jq -r --arg repo "$GITHUB_REPOSITORY" --arg actor "$ACTOR" --arg instruction "$INSTRUCTION" '
+            "Repository: \($repo)\n" +
+            "Pull request: #\(.url | split("/") | last) – \(.title)\n" +
+            "URL: \(.url)\n" +
+            "Head branch: \(.headRefName)\n" +
+            "Base branch: \(.baseRefName)\n" +
+            "Requested by: @\($actor) via PR Command\n\n" +
+            "Instruction:\n\($instruction)"' <<<"$pr_json")
+
+          body=$(jq -n --arg text "$text" '{text: $text}')
+          response=$(curl -sS -w '\n%{http_code}' -X POST \
+            "https://api.anthropic.com/v1/claude_code/routines/${routine_id}/fire" \
+            -H "Authorization: Bearer ${routine_token}" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "Content-Type: application/json" \
+            -d "$body")
+          status=$(tail -n1 <<<"$response")
+          payload=$(sed '$d' <<<"$response")
+          [[ "$status" =~ ^2 ]] || fail "Routine fire failed with HTTP $status: $(head -c 500 <<<"$payload")"
+
+          url=$(jq -r '.claude_code_session_url // empty' <<<"$payload")
+          [ -n "$url" ] || fail "Routine fire returned no session URL: $(head -c 500 <<<"$payload")"
+          marker=$(jq -cn --arg url "$url" '{url: $url}')
+
+          {
+            printf '<!-- pr-command:session %s -->\n' "$marker"
+            printf '🤖 **Claude session started** by @%s – [open in claude.ai/code](%s)\n\n' "$ACTOR" "$url"
+            printf '<details><summary>Instruction</summary>\n\n'
+            sed 's/^/> /' <<<"$INSTRUCTION"
+            printf '\n</details>\n'
+          } | gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file -
+          echo "Session: $url" >> "$GITHUB_STEP_SUMMARY"

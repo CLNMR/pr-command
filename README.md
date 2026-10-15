@@ -33,8 +33,8 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
      goes back to "To decide". Marking it mergeable again removes the block.
 - **Agent:**
   1. The app dispatches the repo's `pr-command.yml`.
-  2. That workflow fires the repo's claude.ai routine with the PR number, branch and your
-     instruction.
+  2. That workflow fires **your** claude.ai routine (secret `CLAUDE_ROUTINE_<LOGIN>`) with the PR
+     number, branch and your instruction. The session runs in your own claude.ai account.
   3. It then comments the session link on the PR, and the app shows that link.
   4. You continue the session in claude.ai/code.
   5. The PR gets the `agent-session` label and moves to the "With agent" section, and the next
@@ -78,8 +78,9 @@ This repo is set up for `univelop/aya`. To run your own copy:
    [`aya-setup/`](aya-setup/.github/workflows/pr-command.yml) is a filled-in example. Change
    `allowed_users` to your GitHub login, and list your repo's CI workflow names under
    `workflow_run`.
-6. **Secrets and routine:** add the three secrets ([step 3](#3-secrets-org-level-or-repo-level-while-only-aya-uses-it))
-   and create the claude.ai routine ([step 5](#5-routines-claudeaicoderoutines)).
+6. **Secrets and routines:** add the secrets ([step 3](#3-secrets-org-level-or-repo-level-while-only-aya-uses-it)).
+   Everyone who starts sessions creates their own routine ([step 5](#5-routines-claudeaicoderoutines),
+   [SETUP-COLLEAGUES.md](SETUP-COLLEAGUES.md)).
 7. **First sign-in:** grant the OAuth app access to your org on GitHub's consent screen. If your
    org restricts OAuth apps, an org owner then approves it under Settings → Third-party access.
 
@@ -124,7 +125,7 @@ Copy the contents of [`github-workflows/`](github-workflows) into the `univelop/
 |---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Output of `claude setup-token`. The merge agent runs on your subscription. |
 | `PR_COMMAND_TOKEN` | Fine-grained PAT (or GitHub App token) with Contents, Pull requests, Issues and Actions **write** on the org repos. Pushes and merges made with the default `GITHUB_TOKEN` don't trigger other workflows, so CI would not re-run after the agent's fix. |
-| `CLAUDE_ROUTINES` | JSON: `{"aya": {"id": "trig_…", "token": "sk-ant-oat01-…"}, "*": {…}}`. `"*"` is the fallback routine for any repo without its own entry. |
+| `CLAUDE_ROUTINE_<LOGIN>` | One per person: `{"id": "trig_…", "token": "sk-ant-oat01-…"}`. `<LOGIN>` is the GitHub login in upper case with `-` replaced by `_` (e.g. `CLAUDE_ROUTINE_FLO_MUELLER`). There is no shared fallback: sessions run in the account of whoever starts them. |
 
 ### 4. Each repo
 
@@ -138,8 +139,9 @@ Copy the contents of [`github-workflows/`](github-workflows) into the `univelop/
 
 ### 5. Routines (claude.ai/code/routines)
 
-Create one routine per repo, or a single routine with all repos as the `"*"` fallback. Add an
-**API trigger** and put its ID and token into `CLAUDE_ROUTINES`. The fire text reaches the
+Each person creates their own routine on the repos they use, adds an **API trigger**, and has
+its ID and token stored as `CLAUDE_ROUTINE_<LOGIN>`. [SETUP-COLLEAGUES.md](SETUP-COLLEAGUES.md)
+is the step-by-step version to hand to colleagues. The fire text reaches the
 session as untrusted data, so the routine prompt has to opt in to acting on it explicitly:
 
 ```text

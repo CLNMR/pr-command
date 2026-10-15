@@ -42,8 +42,9 @@ jobs:
     with:
       pr: ${{ inputs.pr }}
       instruction: ${{ inputs.instruction }}
-      # Who may start sessions. They run on the subscription of the routine's owner.
-      allowed_users: 'CLNMR'
+      # Who may start sessions. Each person needs their own routine:
+      # https://github.com/CLNMR/pr-command/blob/main/SETUP-COLLEAGUES.md
+      allowed_users: 'bl4blub,ChristofJaspersen,cJannik,CLNMR,davidmaria1991,DerHahne,dividebyzero,Flo-Mueller,Henne-hh,janiswehen,janneskoehler,Kijomi03,lassekulawiak,maxsk-ger,PercysGit,philthefox,pierre-su,PraktikantUnivelop,sinnaj-r,veronicailinseer'
     secrets: inherit
 
   merge:
@@ -58,7 +59,7 @@ jobs:
       pr: ${{ format('{0}', github.event.pull_request.number || '') }}
       merge_method: squash
       # Whose PRs the merge agent may work on. It runs on the CLAUDE_CODE_OAUTH_TOKEN owner's subscription.
-      allowed_users: 'CLNMR'
+      allowed_users: 'bl4blub,ChristofJaspersen,cJannik,CLNMR,davidmaria1991,DerHahne,dividebyzero,Flo-Mueller,Henne-hh,janiswehen,janneskoehler,Kijomi03,lassekulawiak,maxsk-ger,PercysGit,philthefox,pierre-su,PraktikantUnivelop,sinnaj-r,veronicailinseer'
       # Checks that only a human can satisfy (review gates). The merge agent ignores them.
       human_checks: ''
     secrets: inherit

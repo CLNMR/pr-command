@@ -1,8 +1,9 @@
-# Starts a Claude Code session in claude.ai/code on a PR branch by firing the repo's
-# routine, then posts the session link on the PR (read back by the PR Command app).
+# Starts a Claude Code session in claude.ai/code on a PR branch by firing the routine of the
+# person who clicked "Agent", then posts the session link on the PR (read back by the PR Command app).
 #
-# Org secret CLAUDE_ROUTINES (JSON): {"<repo>": {"id": "trig_…", "token": "sk-ant-oat01-…"}, "*": {…}}
-# "*" is the fallback routine for repos without their own entry.
+# One secret per person (repo or org level): CLAUDE_ROUTINE_<LOGIN>, where <LOGIN> is the GitHub
+# login in upper case with "-" replaced by "_". Value: {"id": "trig_…", "token": "sk-ant-oat01-…"}.
+# The session runs in that person's claude.ai account, so there is deliberately no shared fallback.
 name: PR Command – session
 
 on:
@@ -15,7 +16,7 @@ on:
         type: string
         required: true
       allowed_users:
-        description: Comma-separated GitHub logins allowed to start sessions (they run on the routine owner's subscription)
+        description: Comma-separated GitHub logins allowed to start sessions (each runs in their own claude.ai account)
         type: string
         required: true
 
@@ -27,7 +28,9 @@ jobs:
       - name: Fire routine
         env:
           GH_TOKEN: ${{ github.token }}
-          ROUTINES: ${{ secrets.CLAUDE_ROUTINES }}
+          # Secrets can't be looked up by a computed name in an expression, so pick the person's
+          # routine out of the secrets context below. Every secret value stays masked in the log.
+          SECRETS_JSON: ${{ toJSON(secrets) }}
           PR: ${{ inputs.pr }}
           INSTRUCTION: ${{ inputs.instruction }}
           ALLOWED_USERS: ${{ inputs.allowed_users }}
@@ -35,7 +38,6 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          repo_name="${GITHUB_REPOSITORY#*/}"
 
           fail() {
             printf '<!-- pr-command:session-error -->\n%s\n\n[Workflow run](%s)\n' "$1" "$RUN_URL" \
@@ -46,12 +48,12 @@ jobs:
 
           [[ "$PR" =~ ^[0-9]+$ ]] || fail "Invalid PR number"
           [[ ",${ALLOWED_USERS// /}," == *",$ACTOR,"* ]] || fail "@$ACTOR is not allowed to start Claude sessions in this repo."
-          routines="${ROUTINES:-}"
-          [ -n "$routines" ] || routines='{}'
-          routine=$(jq -c --arg r "$repo_name" '.[$r] // .["*"] // empty' <<<"$routines" 2>/dev/null || true)
-          [ -n "$routine" ] || fail "No routine configured for $repo_name in the CLAUDE_ROUTINES secret."
-          routine_id=$(jq -r .id <<<"$routine")
-          routine_token=$(jq -r .token <<<"$routine")
+          secret_name="CLAUDE_ROUTINE_$(tr 'a-z-' 'A-Z_' <<<"$ACTOR")"
+          routine=$(jq -c --arg k "$secret_name" '.[$k] // empty | fromjson? // empty' <<<"$SECRETS_JSON" 2>/dev/null || true)
+          [ -n "$routine" ] || fail "@$ACTOR has no Claude routine set up yet: the secret $secret_name is missing or not valid JSON. See SETUP-COLLEAGUES.md in the PR Command repo."
+          routine_id=$(jq -r '.id // empty' <<<"$routine")
+          routine_token=$(jq -r '.token // empty' <<<"$routine")
+          [ -n "$routine_id" ] && [ -n "$routine_token" ] || fail "The secret $secret_name needs both \"id\" and \"token\"."
           echo "::add-mask::$routine_token"
 
           pr_json=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title,url,headRefName,baseRefName,state)

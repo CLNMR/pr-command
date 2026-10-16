@@ -31,6 +31,8 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
   3. If the agent gives up, or the PR is still blocked after 2 attempts, it gets the
      `needs-attention` label and a `⚠️ WARNING:` block at the top of its description, and it
      goes back to "To decide". Marking it mergeable again removes the block.
+  4. **Not mergeable** (`m` on a PR under "Merging") takes it back: it turns off auto-merge,
+     removes the labels, cancels a running merge agent, and the PR returns to "To decide".
 - **Agent:**
   1. The app dispatches the repo's `pr-command.yml`.
   2. That workflow fires **your** claude.ai routine (secret `CLAUDE_ROUTINE_<LOGIN>`) with the PR
@@ -50,7 +52,7 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
 |---|---|
 | `j` / `k`, `↓` / `↑` | Next / previous PR |
 | `x` | Close (confirm with `↵`) |
-| `m` | Mergeable |
+| `m` | Mergeable, or Not mergeable for a PR under "Merging" |
 | `a` | Start a Claude session (`⌘↵` sends) |
 | `o` | Open on GitHub |
 | `s` | Open the latest Claude session |

@@ -3,6 +3,7 @@ import {BranchName, Button, Flash, Label, RelativeTime, Spinner, StateLabel} fro
 import {
   ArrowLeftIcon,
   CheckIcon,
+  CircleSlashIcon,
   DependabotIcon,
   GitCommitIcon,
   LinkExternalIcon,
@@ -71,9 +72,15 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
           <KbdButton hotkey="x" variant="danger" leadingVisual={XIcon} onClick={onClose}>
             Close
           </KbdButton>
-          <KbdButton hotkey="m" variant="primary" leadingVisual={CheckIcon} onClick={onMergeable} disabled={decided}>
-            Mergeable
-          </KbdButton>
+          {decided ? (
+            <KbdButton hotkey="m" leadingVisual={CircleSlashIcon} onClick={onMergeable}>
+              Not mergeable
+            </KbdButton>
+          ) : (
+            <KbdButton hotkey="m" variant="primary" leadingVisual={CheckIcon} onClick={onMergeable}>
+              Mergeable
+            </KbdButton>
+          )}
           <KbdButton hotkey="a" leadingVisual={DependabotIcon} onClick={onAgent}>
             Agent
           </KbdButton>

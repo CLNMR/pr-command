@@ -322,6 +322,22 @@ export async function markMergeable(pr: PR) {
   await request('POST', `/repos/${ORG}/${pr.repo}/issues/${pr.number}/labels`, {labels: [LABEL_READY]})
 }
 
+/**
+ * Takes the PR out of the merge queue: turns off auto-merge, removes the labels and stops a
+ * running merge agent. The merge workflow leaves PRs without the label alone.
+ */
+export async function unmarkMergeable(pr: PR) {
+  await gql(`mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }`, {
+    id: pr.id,
+  }).catch(() => {}) // auto-merge wasn't on
+  await removeLabels(pr, [LABEL_READY, LABEL_MERGE_AGENT])
+  const runId = pr.status === 'merge-agent' ? pr.mergeRuns[0]?.url.match(/\/actions\/runs\/(\d+)/)?.[1] : undefined
+  if (runId) {
+    // Best effort: the run may have finished already.
+    await request('POST', `/repos/${ORG}/${pr.repo}/actions/runs/${runId}/cancel`).catch(() => {})
+  }
+}
+
 async function removeLabels(pr: PR, names: string[]) {
   for (const name of names) {
     if (pr.labels.some(l => l.name === name)) {

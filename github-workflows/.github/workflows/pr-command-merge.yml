@@ -312,6 +312,12 @@ jobs:
           summary=$(jq -r '.summary // empty' "$RESULT" 2>/dev/null || true)
           gh pr edit "$N" --repo "$R" --remove-label "$AGENT" || true
 
+          # Taken back in the app ("Not mergeable") while the agent ran: don't queue it or flag it.
+          if ! gh pr view "$N" --repo "$R" --json labels --jq '.labels[].name' | grep -qx "$READY"; then
+            echo "PR is no longer marked ready-to-merge; leaving it alone."
+            exit 0
+          fi
+
           if [ "$status" = give_up ]; then
             body=$(gh pr view "$N" --repo "$R" --json body --jq .body)
             stripped=$(perl -0pe 's/<!-- pr-command:warning:start -->.*?<!-- pr-command:warning:end -->\s*//gs' <<<"$body")

@@ -5,7 +5,7 @@ import {Blankslate} from '@primer/react/experimental'
 import {GearIcon, SignOutIcon, SyncIcon} from '@primer/octicons-react'
 import {signOut, storedToken} from './auth'
 import {ORG} from './config'
-import {closePR, fetchMyPRs, fetchViewer, GitHubError, markMergeable, setToken, startSession, type PR} from './github'
+import {closePR, fetchMyPRs, fetchViewer, GitHubError, markMergeable, setToken, startSession, unmarkMergeable, type PR} from './github'
 import {useShortcuts} from './shortcuts'
 import {loadRepos, saveRepos} from './settings'
 import {Login} from './components/Login'
@@ -33,7 +33,7 @@ const OVERRIDE_TTL = 2 * 60_000
 // How long to wait for the workflow to post the session link.
 const SESSION_TIMEOUT = 4 * 60_000
 
-type Override = {kind: 'closed' | 'queued' | 'agent'; at: number}
+type Override = {kind: 'closed' | 'queued' | 'agent' | 'unqueued'; at: number}
 type Toast = {id: number; variant: 'default' | 'success' | 'danger' | 'warning'; text: string}
 
 function keyFromHash(hash: string): string | null {
@@ -118,6 +118,9 @@ function Main({onSignOut}: {onSignOut: () => void}) {
       const o = overrides.get(pr.key)
       if (!o || now - o.at > OVERRIDE_TTL) return [pr]
       if (o.kind === 'closed') return []
+      if (o.kind === 'unqueued') {
+        return pr.status === 'queued' || pr.status === 'merge-agent' ? [{...pr, status: 'open' as const}] : [pr]
+      }
       if (o.kind === 'agent') {
         return pr.status === 'open' || pr.status === 'attention' ? [{...pr, status: 'agent' as const}] : [pr]
       }
@@ -182,6 +185,20 @@ function Main({onSignOut}: {onSignOut: () => void}) {
       })
   }
 
+  // Back to "To decide". The PR stays selected.
+  const unqueue = (pr: PR) => {
+    setOverrides(m => new Map(m).set(pr.key, {kind: 'unqueued', at: Date.now()}))
+    unmarkMergeable(pr)
+      .then(() => {
+        toast('success', `${pr.key} no longer queued to merge`)
+        void queryClient.invalidateQueries({queryKey: ['prs']})
+      })
+      .catch((e: Error) => {
+        dropOverride(pr)
+        toast('danger', `${pr.key}: ${e.message}`)
+      })
+  }
+
   const startAgent = (pr: PR, instruction: string) => {
     setDialog(null)
     setPending(m => new Map(m).set(pr.key, Date.now()))
@@ -202,7 +219,8 @@ function Main({onSignOut}: {onSignOut: () => void}) {
       })
   }
 
-  const canMerge = selected && ['open', 'attention', 'agent'].includes(selected.status)
+  const queued = selected && (selected.status === 'queued' || selected.status === 'merge-agent')
+  const toggleMergeable = (pr: PR) => (queued ? unqueue(pr) : decide(pr, 'queued'))
 
   useShortcuts(
     {
@@ -218,7 +236,7 @@ function Main({onSignOut}: {onSignOut: () => void}) {
             a: () => setDialog('agent'),
             o: () => window.open(selected.url, '_blank', 'noreferrer'),
             Escape: () => narrow && select(null),
-            ...(canMerge ? {m: () => decide(selected, 'queued')} : {}),
+            m: () => toggleMergeable(selected),
             ...(selected.sessions[0] ? {s: () => window.open(selected.sessions[0].url, '_blank', 'noreferrer')} : {}),
             ...(selected.mergeRuns[0] ? {g: () => window.open(selected.mergeRuns[0].url, '_blank', 'noreferrer')} : {}),
           }
@@ -280,7 +298,7 @@ function Main({onSignOut}: {onSignOut: () => void}) {
                 pendingSession={pending.has(selected.key)}
                 onBack={() => select(null)}
                 onClose={() => setDialog('close')}
-                onMergeable={() => decide(selected, 'queued')}
+                onMergeable={() => toggleMergeable(selected)}
                 onAgent={() => setDialog('agent')}
               />
             ) : (

@@ -1,13 +1,14 @@
 import {useState} from 'react'
 import {Button, Flash, FormControl, Heading, Text, TextInput} from '@primer/react'
 import {MarkGithubIcon} from '@primer/octicons-react'
-import {signInWithGitHub, storeToken} from '../auth'
+import {signInWithGitHub, signOutReason, storeToken} from '../auth'
 import {firebaseEnabled, ORG} from '../config'
 
 export function Login({onToken}: {onToken: (token: string) => void}) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [pat, setPat] = useState('')
+  const [reason] = useState(signOutReason)
 
   async function login() {
     setBusy(true)
@@ -28,6 +29,7 @@ export function Login({onToken}: {onToken: (token: string) => void}) {
         PR Command
       </Heading>
       <Text className="muted">Your open pull requests in {ORG}.</Text>
+      {reason && !error && <Flash variant="warning">Signed out automatically. {reason}</Flash>}
       {error && <Flash variant="danger">{error}</Flash>}
       {firebaseEnabled ? (
         <Button variant="primary" size="large" leadingVisual={MarkGithubIcon} onClick={login} loading={busy} block>

@@ -200,6 +200,16 @@ function toPR(raw: RawPR): PR {
   }
 }
 
+/** GitHub's error message if the token is rejected, null if it still works (or GitHub is just flaky). */
+export async function checkToken(): Promise<string | null> {
+  try {
+    await request('GET', '/user')
+    return null
+  } catch (e) {
+    return e instanceof GitHubError && e.status === 401 ? e.message : null
+  }
+}
+
 export async function fetchViewer(): Promise<Viewer> {
   const data = await gql<{viewer: Viewer}>(`query { viewer { login avatarUrl } }`)
   return data.viewer

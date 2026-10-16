@@ -3,9 +3,9 @@ import {useQuery, useQueryClient} from '@tanstack/react-query'
 import {Avatar, Flash, IconButton, Spinner} from '@primer/react'
 import {Blankslate} from '@primer/react/experimental'
 import {GearIcon, SignOutIcon, SyncIcon} from '@primer/octicons-react'
-import {signOut, storedToken} from './auth'
+import {recordSignOutReason, signOut, storedToken} from './auth'
 import {ORG} from './config'
-import {closePR, fetchMyPRs, fetchViewer, GitHubError, markMergeable, setToken, startSession, unmarkMergeable, type PR} from './github'
+import {checkToken, closePR, fetchMyPRs, fetchViewer, GitHubError, markMergeable, setToken, startSession, unmarkMergeable, type PR} from './github'
 import {useShortcuts} from './shortcuts'
 import {loadRepos, saveRepos} from './settings'
 import {Login} from './components/Login'
@@ -16,16 +16,13 @@ import {KbdButton} from './components/KbdButton'
 
 export function App() {
   const [token, setTokenState] = useState(storedToken)
+  const onSignOut = useCallback(() => {
+    void signOut()
+    setTokenState(null)
+  }, [])
   if (!token) return <Login onToken={setTokenState} />
   setToken(token)
-  return (
-    <Main
-      onSignOut={() => {
-        void signOut()
-        setTokenState(null)
-      }}
-    />
-  )
+  return <Main onSignOut={onSignOut} />
 }
 
 // Optimistic overrides survive until the next polls have caught up with GitHub.
@@ -82,10 +79,25 @@ function Main({onSignOut}: {onSignOut: () => void}) {
     refetchInterval: pending.size > 0 ? 5_000 : 30_000,
   })
 
+  // Sign out only if GitHub confirms that the token is no longer valid, not on a one-off 401.
   const authError = [viewer.error, prsQuery.error].find(e => e instanceof GitHubError && e.status === 401)
   useEffect(() => {
-    if (authError) onSignOut()
-  }, [authError, onSignOut])
+    if (!authError) return
+    let cancelled = false
+    void checkToken().then(error => {
+      if (cancelled) return
+      if (error) {
+        recordSignOutReason(error)
+        onSignOut()
+      } else {
+        toast('warning', `GitHub returned 401 once (${(authError as Error).message}); still signed in.`)
+        void queryClient.invalidateQueries()
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [authError, onSignOut, toast, queryClient])
 
   // Resolve pending session starts once the workflow has commented on the PR.
   useEffect(() => {

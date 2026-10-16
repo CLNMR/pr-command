@@ -71,6 +71,17 @@ jobs:
           set -euo pipefail
           R="$GITHUB_REPOSITORY"
 
+          # Only ever queues the PR, never merges it. Not `gh pr merge --auto`: gh merges right away when
+          # it considers the PR "immediately mergeable", which includes UNSTABLE (checks still running).
+          # Fails harmlessly when the repo doesn't allow auto-merge; CI finishing triggers a new scan.
+          queue_auto_merge() {
+            local id
+            id=$(gh pr view "$1" --repo "$R" --json id --jq .id) || return 0
+            gh api graphql -f id="$id" -f method="${METHOD^^}" -f query='mutation($id: ID!, $method: PullRequestMergeMethod!) {
+              enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }' \
+              >/dev/null 2>&1 || true
+          }
+
           gh label create "$READY" --repo "$R" --color 1f883d --description "PR Command: merge when possible" --force >/dev/null
           gh label create "$ATTENTION" --repo "$R" --color d1242f --description "PR Command: merge agent gave up" --force >/dev/null
           gh label create "$AGENT" --repo "$R" --color bf8700 --description "PR Command: merge agent is working" --force >/dev/null
@@ -91,7 +102,7 @@ jobs:
 
           ensure_auto() {
             [ "$(jq -r '.autoMergeRequest != null' <<<"$1")" = true ] && return 0
-            gh pr merge "$2" --repo "$R" --auto "--$METHOD" >/dev/null 2>&1 || true
+            queue_auto_merge "$2"
           }
 
           if [ -n "$PR" ]; then
@@ -137,7 +148,14 @@ jobs:
               | select((.name // .context) | IN($h[]) | not)
               | select((.__typename == "CheckRun" and .status != "COMPLETED")
                        or ((.state // "") | IN("PENDING","EXPECTED")))] | length' <<<"$d")
-            echo "#$n mergeable=$mergeable state=$state failing=[$failing] pending=$pending human=[$human]"
+            checks=$(jq -r '[.statusCheckRollup[]? | select((.workflowName // "") != env.SELF_WORKFLOW)] | length' <<<"$d")
+            echo "#$n mergeable=$mergeable state=$state failing=[$failing] pending=$pending checks=$checks human=[$human]"
+            # Right after a push, CI may not have registered its checks yet: "nothing failing, nothing
+            # pending" must not be read as green. The scan after CI finishes picks the PR up again.
+            if [ "$checks" -eq 0 ] && [ "$mergeable" != CONFLICTING ]; then
+              echo "#$n: no CI checks on the head commit yet, waiting"
+              continue
+            fi
 
             [ "$mergeable" = UNKNOWN ] && continue
 
@@ -318,4 +336,9 @@ jobs:
             } | gh pr comment "$N" --repo "$R" --body-file -
             [ -z "$error" ] || echo "::error::Claude: $error"
           fi
-          gh pr merge "$N" --repo "$R" --auto "--$METHOD" >/dev/null 2>&1 || true
+          # Queue only (see queue_auto_merge in the scan job): the fix was just pushed and CI hasn't run yet.
+          # Without auto-merge, the scan that runs when CI finishes merges the PR if it's green.
+          id=$(gh pr view "$N" --repo "$R" --json id --jq .id) && gh api graphql -f id="$id" -f method="${METHOD^^}" \
+            -f query='mutation($id: ID!, $method: PullRequestMergeMethod!) {
+              enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }' \
+            >/dev/null 2>&1 || true

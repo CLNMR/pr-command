@@ -8,11 +8,13 @@ import {
   GitCommitIcon,
   LinkExternalIcon,
   PlayIcon,
+  RocketIcon,
   SyncIcon,
   XIcon,
 } from '@primer/octicons-react'
-import {fetchCommits, type PR} from '../github'
+import {fetchCommits, type PR, type Preview} from '../github'
 import {KbdButton} from './KbdButton'
+import {ORG} from '../config'
 
 const STATUS_LABEL: Record<PR['status'], {text: string; variant: 'danger' | 'attention' | 'done'} | null> = {
   attention: {text: 'Needs attention', variant: 'danger'},
@@ -25,13 +27,15 @@ const STATUS_LABEL: Record<PR['status'], {text: string; variant: 'danger' | 'att
 interface Props {
   pr: PR
   pendingSession: boolean
+  preview: Preview | null
+  onDeployPreview: () => void
   onBack: () => void
   onClose: () => void
   onMergeable: () => void
   onAgent: () => void
 }
 
-export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAgent}: Props) {
+export function PRDetail({pr, pendingSession, preview, onDeployPreview, onBack, onClose, onMergeable, onAgent}: Props) {
   const commits = useQuery({
     queryKey: ['commits', pr.repo, pr.number, pr.commitCount],
     queryFn: () => fetchCommits(pr.repo, pr.number),
@@ -40,6 +44,8 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
   const latestSession = pr.sessions[0]
   const latestMergeRun = pr.mergeRuns[0]
   const decided = pr.status === 'queued' || pr.status === 'merge-agent'
+  // Commits pushed since the preview's commit (newest first), if that commit is still on the branch.
+  const previewIdx = preview?.sha && commits.data ? commits.data.findIndex(c => c.oid === preview.sha) : -1
 
   return (
     <article className="detail">
@@ -87,6 +93,26 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
           <KbdButton hotkey="o" leadingVisual={LinkExternalIcon} href={pr.url} target="_blank" rel="noreferrer">
             GitHub
           </KbdButton>
+          {preview?.state === 'deploying' ? (
+            <KbdButton hotkey="p" leadingVisual={RocketIcon} loading>
+              Deploying preview
+            </KbdButton>
+          ) : preview?.state === 'ready' && preview.url ? (
+            <>
+              <KbdButton hotkey="p" leadingVisual={RocketIcon} href={preview.url} target="_blank" rel="noreferrer">
+                Preview
+              </KbdButton>
+              {preview.stale && (
+                <KbdButton hotkey="Shift+P" leadingVisual={SyncIcon} onClick={onDeployPreview}>
+                  New preview
+                </KbdButton>
+              )}
+            </>
+          ) : (
+            <KbdButton hotkey="p" leadingVisual={RocketIcon} onClick={onDeployPreview}>
+              Deploy preview
+            </KbdButton>
+          )}
           {latestSession && (
             <KbdButton hotkey="s" leadingVisual={LinkExternalIcon} href={latestSession.url} target="_blank" rel="noreferrer">
               Session
@@ -131,6 +157,43 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
             </section>
           )}
 
+          {preview && (
+            <section className="panel">
+              <h2 className="panel-heading">Preview</h2>
+              {preview.state === 'deploying' && (
+                <p className="session-row">
+                  <Spinner size="small" /> Deploying, started <RelativeTime date={new Date(preview.at)} />
+                </p>
+              )}
+              {preview.state === 'failed' && (
+                <Flash variant="danger" className="session-error">
+                  Preview deployment failed.{' '}
+                  <a
+                    href={`https://github.com/${ORG}/${pr.repo}/actions/workflows/preview-deploy.yml`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Workflow runs
+                  </a>
+                </Flash>
+              )}
+              {preview.state === 'ready' && preview.url && (
+                <>
+                  <a className="session-row" href={preview.url} target="_blank" rel="noreferrer">
+                    <RocketIcon /> Deployed <RelativeTime date={new Date(preview.at)} /> <LinkExternalIcon size={12} />
+                  </a>
+                  <p className={preview.stale ? 'preview-note fg-attention' : 'preview-note muted'}>
+                    {!preview.stale
+                      ? 'Up to date with the branch.'
+                      : previewIdx > 0
+                        ? `${previewIdx} new commit${previewIdx === 1 ? '' : 's'} since this preview.`
+                        : 'The branch has changed since this preview.'}
+                  </p>
+                </>
+              )}
+            </section>
+          )}
+
           {pr.mergeRuns.length > 0 && (
             <section className="panel">
               <h2 className="panel-heading">Merge agent runs</h2>
@@ -157,6 +220,7 @@ export function PRDetail({pr, pendingSession, onBack, onClose, onMergeable, onAg
                       {c.author} · <RelativeTime date={new Date(c.date)} />
                     </span>
                   </span>
+                  {preview?.state === 'ready' && c.oid === preview.sha && <Label variant="success">preview</Label>}
                   <a className="commit-sha" href={c.url} target="_blank" rel="noreferrer">
                     {c.shortOid}
                   </a>

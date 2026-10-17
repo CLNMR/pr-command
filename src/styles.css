@@ -169,6 +169,7 @@ body,
 }
 .session-row:hover { text-decoration: underline; }
 .session-error { font-size: 12px; margin-bottom: 8px; }
+.preview-note { font-size: 12px; margin: 4px 0 0; }
 
 .commit-list { list-style: none; margin: 0; padding: 0; }
 .commit-list li {

@@ -46,6 +46,11 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
   The routine has to be fired from Actions: the routine endpoint does not allow browser
   calls (its CORS preflight returns 405).
 
+- **Preview** (`p`): comments `/deploy-preview` on the PR, which starts aya's Preview Deploy
+  workflow. When its "Preview Deployment" comment arrives, `p` opens the preview. The trigger
+  comment records the head commit, so the app shows how many commits were pushed since; then
+  **New preview** (`Shift+P`) deploys again. Previews expire after 7 days.
+
 ### Shortcuts
 
 | Key | Action |
@@ -54,6 +59,8 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
 | `x` | Close (confirm with `↵`) |
 | `m` | Mergeable, or Not mergeable for a PR under "Merging" |
 | `a` | Start a Claude session (`⌘↵` sends) |
+| `p` | Deploy a preview, or open it once it's ready |
+| `Shift+P` | New preview, once the branch has commits the preview doesn't include |
 | `o` | Open on GitHub |
 | `s` | Open the latest Claude session |
 | `g` | Open the latest merge agent run |

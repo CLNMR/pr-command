@@ -79,6 +79,22 @@ export interface PR {
   sessions: Session[]
   mergeRuns: Session[] // merge agent workflow runs, newest first
   sessionError: {at: string; body: string} | null
+  headOid: string
+  preview: Preview | null
+}
+
+/**
+ * Preview deployment by aya's Preview Deploy workflow, which reacts to a "/deploy-preview"
+ * comment and answers with a "## Preview Deployment" comment.
+ */
+export interface Preview {
+  state: 'deploying' | 'ready' | 'failed'
+  at: string // when it was requested
+  url: string | null
+  /** Head commit when it was requested. Unknown for previews requested outside the app. */
+  sha: string | null
+  /** The branch has commits the preview doesn't include. */
+  stale: boolean
 }
 
 export interface Commit {
@@ -101,6 +117,14 @@ const SESSION_RE = /<!-- pr-command:session (\{.*?\}) -->/
 const SESSION_ERROR = '<!-- pr-command:session-error -->'
 const MERGE_ATTEMPT = '<!-- pr-command:merge-attempt -->'
 const RUN_LINK_RE = /\[Workflow run\]\((https:\/\/[^)\s]+)\)/
+const PREVIEW_TRIGGER = '/deploy-preview'
+const PREVIEW_MARKER_RE = /<!-- pr-command:preview (\{.*?\}) -->/
+const PREVIEW_RESULT = '## Preview Deployment'
+const PREVIEW_URL_RE = /\*\*Frontend:\*\* (https:\/\/\S+)/
+// Firebase preview channels expire after 7 days (--expires 7d in preview-deploy.yml).
+const PREVIEW_TTL = 7 * 24 * 3600_000
+// A build takes ~4 minutes. Without a result by then, it failed without reacting (e.g. no write access).
+const PREVIEW_TIMEOUT = 20 * 60_000
 const WARNING_BLOCK_RE = /<!-- pr-command:warning:start -->[\s\S]*?<!-- pr-command:warning:end -->\s*/g
 
 function deriveStatus(labels: string[]): PRStatus {
@@ -115,12 +139,13 @@ function deriveStatus(labels: string[]): PRStatus {
 
 const PR_FIELDS = `
   id number title url body bodyHTML isDraft additions deletions changedFiles createdAt updatedAt
-  headRefName baseRefName
+  headRefName baseRefName headRefOid
+  headCommit: commits(last: 1) { nodes { commit { committedDate } } }
   repository { name defaultBranchRef { name } }
   labels(first: 20) { nodes { name color } }
   autoMergeRequest { enabledAt }
   commits { totalCount }
-  comments(last: 40) { nodes { body createdAt } }
+  comments(last: 40) { nodes { body createdAt reactionGroups { content reactors { totalCount } } } }
 `
 
 interface RawPR {
@@ -138,11 +163,48 @@ interface RawPR {
   updatedAt: string
   headRefName: string
   baseRefName: string
+  headRefOid: string
+  headCommit: {nodes: {commit: {committedDate: string}}[]}
   repository: {name: string; defaultBranchRef: {name: string} | null}
   labels: {nodes: {name: string; color: string}[]}
   autoMergeRequest: {enabledAt: string} | null
   commits: {totalCount: number}
-  comments: {nodes: {body: string; createdAt: string}[]}
+  comments: {nodes: RawComment[]}
+}
+
+interface RawComment {
+  body: string
+  createdAt: string
+  reactionGroups: {content: string; reactors: {totalCount: number}}[]
+}
+
+function derivePreview(raw: RawPR): Preview | null {
+  let trigger: RawComment | null = null
+  let result: RawComment | null = null
+  for (const c of raw.comments.nodes) {
+    if (c.body.startsWith(PREVIEW_RESULT)) result = c
+    else if (c.body.includes(PREVIEW_TRIGGER)) trigger = c
+  }
+  if (!trigger) return null
+  const age = Date.now() - new Date(trigger.createdAt).getTime()
+  if (age > PREVIEW_TTL) return null
+  let sha: string | null = null
+  const m = trigger.body.match(PREVIEW_MARKER_RE)
+  if (m) {
+    try {
+      sha = (JSON.parse(m[1]) as {sha: string}).sha
+    } catch {
+      // malformed marker
+    }
+  }
+  const url = result && result.createdAt > trigger.createdAt ? (result.body.match(PREVIEW_URL_RE)?.[1] ?? null) : null
+  const reactions = trigger.reactionGroups
+  const reacted = (r: string) => reactions.some(g => g.content === r && g.reactors.totalCount > 0)
+  const state = url ? 'ready' : reacted('CONFUSED') || age > PREVIEW_TIMEOUT ? 'failed' : 'deploying'
+  // Without the commit, fall back to commit dates: anything committed after the request is new.
+  const headDate = raw.headCommit.nodes[0]?.commit.committedDate ?? ''
+  const stale = sha ? sha !== raw.headRefOid : headDate > trigger.createdAt
+  return {state, at: trigger.createdAt, url, sha, stale}
 }
 
 function toPR(raw: RawPR): PR {
@@ -197,6 +259,8 @@ function toPR(raw: RawPR): PR {
     sessions,
     mergeRuns,
     sessionError,
+    headOid: raw.headRefOid,
+    preview: derivePreview(raw),
   }
 }
 
@@ -356,6 +420,16 @@ async function removeLabels(pr: PR, names: string[]) {
       )
     }
   }
+}
+
+/**
+ * Asks aya's Preview Deploy workflow for a preview of the branch. The marker records the head
+ * commit, so the app can tell later whether the branch has moved on since.
+ */
+export async function deployPreview(pr: PR) {
+  await request('POST', `/repos/${ORG}/${pr.repo}/issues/${pr.number}/comments`, {
+    body: `${PREVIEW_TRIGGER}\n\n<!-- pr-command:preview ${JSON.stringify({sha: pr.headOid})} -->`,
+  })
 }
 
 /**

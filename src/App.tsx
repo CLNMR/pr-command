@@ -5,7 +5,7 @@ import {Blankslate} from '@primer/react/experimental'
 import {GearIcon, SignOutIcon, SyncIcon} from '@primer/octicons-react'
 import {recordSignOutReason, signOut, storedToken} from './auth'
 import {ORG} from './config'
-import {checkToken, closePR, fetchMyPRs, fetchViewer, GitHubError, markMergeable, setToken, startSession, unmarkMergeable, type PR} from './github'
+import {checkToken, closePR, deployPreview, fetchMyPRs, fetchViewer, GitHubError, markMergeable, setToken, startSession, unmarkMergeable, type PR, type Preview} from './github'
 import {useShortcuts} from './shortcuts'
 import {loadRepos, saveRepos} from './settings'
 import {Login} from './components/Login'
@@ -56,6 +56,8 @@ function Main({onSignOut}: {onSignOut: () => void}) {
   const [hash, setHash] = useState(location.hash)
   const [overrides, setOverrides] = useState<Map<string, Override>>(new Map())
   const [pending, setPending] = useState<Map<string, number>>(new Map())
+  // Preview deployments requested in this tab, until the workflow reports back.
+  const [previewRequests, setPreviewRequests] = useState<Map<string, number>>(new Map())
   const [dialog, setDialog] = useState<null | 'close' | 'agent' | 'repos'>(null)
   const [repos, setRepos] = useState(loadRepos)
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -76,7 +78,12 @@ function Main({onSignOut}: {onSignOut: () => void}) {
   const prsQuery = useQuery({
     queryKey: ['prs', repos],
     queryFn: () => fetchMyPRs(repos),
-    refetchInterval: pending.size > 0 ? 5_000 : 30_000,
+    refetchInterval: query =>
+      pending.size > 0
+        ? 5_000
+        : previewRequests.size > 0 || query.state.data?.some(p => p.preview?.state === 'deploying')
+          ? 10_000
+          : 30_000,
   })
 
   // Sign out only if GitHub confirms that the token is no longer valid, not on a one-off 401.
@@ -123,6 +130,47 @@ function Main({onSignOut}: {onSignOut: () => void}) {
     }
     if (next.size !== pending.size) setPending(next)
   }, [prsQuery.data, pending, toast])
+
+  // Report finished preview deployments that were requested here.
+  useEffect(() => {
+    if (!prsQuery.data || previewRequests.size === 0) return
+    const next = new Map(previewRequests)
+    for (const [key, at] of previewRequests) {
+      const pr = prsQuery.data.find(p => p.key === key)
+      const preview = pr?.preview
+      if (!pr) next.delete(key)
+      else if (preview && preview.state !== 'deploying' && new Date(preview.at).getTime() > at - 60_000) {
+        next.delete(key)
+        if (preview.state === 'ready') toast('success', `${key}: preview deployed`)
+        else toast('danger', `${key}: preview deployment failed`)
+      }
+    }
+    if (next.size !== previewRequests.size) setPreviewRequests(next)
+  }, [prsQuery.data, previewRequests, toast])
+
+  // Shows the deployment as running from the click on, before the poll sees the comment.
+  const previewOf = (pr: PR): Preview | null => {
+    const at = previewRequests.get(pr.key)
+    if (at === undefined || (pr.preview && new Date(pr.preview.at).getTime() > at - 60_000)) return pr.preview
+    return {state: 'deploying', at: new Date(at).toISOString(), url: null, sha: pr.headOid, stale: false}
+  }
+
+  const requestPreview = (pr: PR) => {
+    setPreviewRequests(m => new Map(m).set(pr.key, Date.now()))
+    deployPreview(pr)
+      .then(() => {
+        toast('default', `${pr.key}: deploying preview…`)
+        void queryClient.invalidateQueries({queryKey: ['prs']})
+      })
+      .catch((e: Error) => {
+        setPreviewRequests(m => {
+          const copy = new Map(m)
+          copy.delete(pr.key)
+          return copy
+        })
+        toast('danger', `${pr.key}: ${e.message}`)
+      })
+  }
 
   const {toDecide, withAgent, inFlight} = useMemo(() => {
     const now = Date.now()
@@ -233,6 +281,16 @@ function Main({onSignOut}: {onSignOut: () => void}) {
 
   const queued = selected && (selected.status === 'queued' || selected.status === 'merge-agent')
   const toggleMergeable = (pr: PR) => (queued ? unqueue(pr) : decide(pr, 'queued'))
+  const preview = selected && previewOf(selected)
+  // p opens the preview, or deploys one if there is none. Shift+P deploys a new one once the branch has moved on.
+  const previewShortcuts = (pr: PR): Record<string, () => void> => {
+    if (preview?.state === 'deploying') return {p: () => {}}
+    if (preview?.state === 'ready' && preview.url) {
+      const url = preview.url
+      return {p: () => window.open(url, '_blank', 'noreferrer'), ...(preview.stale ? {P: () => requestPreview(pr)} : {})}
+    }
+    return {p: () => requestPreview(pr)}
+  }
 
   useShortcuts(
     {
@@ -249,6 +307,7 @@ function Main({onSignOut}: {onSignOut: () => void}) {
             o: () => window.open(selected.url, '_blank', 'noreferrer'),
             Escape: () => narrow && select(null),
             m: () => toggleMergeable(selected),
+            ...previewShortcuts(selected),
             ...(selected.sessions[0] ? {s: () => window.open(selected.sessions[0].url, '_blank', 'noreferrer')} : {}),
             ...(selected.mergeRuns[0] ? {g: () => window.open(selected.mergeRuns[0].url, '_blank', 'noreferrer')} : {}),
           }
@@ -308,6 +367,8 @@ function Main({onSignOut}: {onSignOut: () => void}) {
                 key={selected.key}
                 pr={selected}
                 pendingSession={pending.has(selected.key)}
+                preview={preview}
+                onDeployPreview={() => requestPreview(selected)}
                 onBack={() => select(null)}
                 onClose={() => setDialog('close')}
                 onMergeable={() => toggleMergeable(selected)}

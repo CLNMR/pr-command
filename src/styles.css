@@ -200,7 +200,7 @@ body,
 .layout.narrow .detail-body { display: block; }
 .layout.narrow .panel { padding: 12px 16px; }
 .layout.narrow .side { border-left: 0; border-top: 1px solid var(--borderColor-default); }
-.layout.narrow .detail { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+.layout.narrow .detail { padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
 .layout.narrow .actions {
   position: fixed;
   left: 0;
@@ -208,8 +208,7 @@ body,
   bottom: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  grid-auto-flow: column;
+  grid-template-columns: repeat(var(--action-columns, 3), minmax(0, 1fr));
   padding: 8px 16px max(8px, env(safe-area-inset-bottom));
   background: var(--bgColor-default);
   border-top: 1px solid var(--borderColor-default);
@@ -303,8 +302,18 @@ body,
 }
 .login-title { font-size: 24px; font-weight: 300; }
 .login-pat { display: flex; flex-direction: column; gap: 12px; width: 100%; text-align: left; }
-.layout.narrow .actions > * { padding-inline: 4px; min-width: 0; }
-.layout.narrow .actions svg { display: none; }
+.layout.narrow .actions > * { padding-inline: 4px; min-width: 0; width: 100%; }
+/* Two-word labels ("Not mergeable", "Deploy preview") break inside the button instead of overflowing. */
+.layout.narrow .actions > * { height: auto; min-height: 40px; padding-block: 4px; }
+.layout.narrow .actions [data-component="buttonContent"] { display: flex; justify-content: center; min-width: 0; width: 100%; }
+.layout.narrow .actions [data-component="leadingVisual"] { display: none; }
+.layout.narrow .actions [data-component="text"] { min-width: 0; white-space: normal; line-height: 1.15; text-align: center; }
+.layout.narrow .actions[data-columns="4"] { gap: 6px; }
+.layout.narrow .actions[data-columns="4"] > * { padding-inline: 2px; font-size: 12px; }
 
 .repo-settings { display: flex; flex-direction: column; gap: 16px; }
 .repo-add { display: flex; gap: 8px; }
+
+/* Narrow header: the title gives way, the buttons and the avatar keep their size. */
+.app-header > * { flex-shrink: 0; }
+.app-header > .app-name { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

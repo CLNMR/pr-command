@@ -45,6 +45,9 @@ export function PRDetail({pr, pendingSession, preview, onDeployPreview, onBack, 
   const latestMergeRun = pr.mergeRuns[0]
   const decided = pr.status === 'queued' || pr.status === 'merge-agent'
   // Commits pushed since the preview's commit (newest first), if that commit is still on the branch.
+  // Close, Mergeable, Agent, GitHub and Preview are always there. On phones they fill two rows.
+  const buttonCount =
+    5 + Number(preview?.state === 'ready' && preview.stale) + Number(Boolean(latestSession)) + Number(Boolean(latestMergeRun))
   const previewIdx = preview?.sha && commits.data ? commits.data.findIndex(c => c.oid === preview.sha) : -1
 
   return (
@@ -74,7 +77,11 @@ export function PRDetail({pr, pendingSession, preview, onDeployPreview, onBack, 
             {pr.changedFiles} files · {pr.commitCount} commits · updated <RelativeTime date={new Date(pr.updatedAt)} />
           </span>
         </div>
-        <div className="actions">
+        <div
+          className="actions"
+          data-columns={Math.ceil(buttonCount / 2)}
+          style={{'--action-columns': Math.ceil(buttonCount / 2)} as React.CSSProperties}
+        >
           <KbdButton hotkey="x" variant="danger" leadingVisual={XIcon} onClick={onClose}>
             Close
           </KbdButton>

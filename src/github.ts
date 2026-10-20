@@ -39,6 +39,38 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return res.json() as Promise<T>
 }
 
+// Images in a private repo (e.g. `blob/<ref>/<path>?raw=true`) only load on github.com with its
+// session cookie. Fetch them through the API instead and hand back an object URL.
+const REPO_FILE_RE =
+  /^https:\/\/(?:github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)|raw\.githubusercontent\.com\/([^/]+)\/([^/]+))\/([^?#]+)/
+const repoImages = new Map<string, Promise<string | null>>()
+
+export function repoImageURL(src: string): Promise<string | null> | null {
+  const m = REPO_FILE_RE.exec(src)
+  if (!m) return null
+  let cached = repoImages.get(src)
+  if (!cached) {
+    cached = fetchRepoFile(m[1] ?? m[3], m[2] ?? m[4], m[5].split('/').map(decodeURIComponent))
+    repoImages.set(src, cached)
+  }
+  return cached
+}
+
+async function fetchRepoFile(owner: string, repo: string, parts: string[]): Promise<string | null> {
+  // The ref may contain slashes, so try each split of "<ref>/<path>" until one exists.
+  for (let i = 1; i < parts.length; i++) {
+    const ref = parts.slice(0, i).join('/')
+    const path = parts.slice(i).map(encodeURIComponent).join('/')
+    const res = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
+      {headers: {Authorization: `Bearer ${token}`, Accept: 'application/vnd.github.raw'}},
+    )
+    if (res.ok) return URL.createObjectURL(await res.blob())
+    if (res.status !== 404) return null
+  }
+  return null
+}
+
 async function gql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
   const data = await request<{data?: T; errors?: {message: string}[]}>('POST', '/graphql', {query, variables})
   if (data.errors?.length) throw new GitHubError(data.errors.map(e => e.message).join('; '), 200)

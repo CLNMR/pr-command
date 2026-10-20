@@ -1,3 +1,4 @@
+import {useEffect, useRef} from 'react'
 import {useQuery} from '@tanstack/react-query'
 import {BranchName, Button, Flash, Label, RelativeTime, Spinner, StateLabel} from '@primer/react'
 import {
@@ -12,7 +13,7 @@ import {
   SyncIcon,
   XIcon,
 } from '@primer/octicons-react'
-import {fetchCommits, type PR, type Preview} from '../github'
+import {fetchCommits, repoImageURL, type PR, type Preview} from '../github'
 import {KbdButton} from './KbdButton'
 import {ORG} from '../config'
 
@@ -136,7 +137,7 @@ export function PRDetail({pr, pendingSession, preview, onDeployPreview, onBack, 
       <div className="detail-body">
         <section className="panel description" aria-label="Description">
           {pr.bodyHTML ? (
-            <div className="markdown-body" dangerouslySetInnerHTML={{__html: pr.bodyHTML}} />
+            <MarkdownBody html={pr.bodyHTML} />
           ) : (
             <p className="muted">No description provided.</p>
           )}
@@ -239,4 +240,21 @@ export function PRDetail({pr, pendingSession, preview, onDeployPreview, onBack, 
       </div>
     </article>
   )
+}
+
+function MarkdownBody({html}: {html: string}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    let cancelled = false
+    for (const img of ref.current?.querySelectorAll('img') ?? []) {
+      const src = img.getAttribute('src') ?? ''
+      repoImageURL(src)?.then(url => {
+        if (url && !cancelled && img.getAttribute('src') === src) img.src = url
+      })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [html])
+  return <div ref={ref} className="markdown-body" dangerouslySetInnerHTML={{__html: html}} />
 }

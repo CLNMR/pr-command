@@ -265,7 +265,8 @@ body,
 .markdown-body th,
 .markdown-body td { padding: 6px 13px; border: 1px solid var(--borderColor-default); }
 .markdown-body tr:nth-child(2n) { background: var(--bgColor-muted); }
-.markdown-body img { max-width: 100%; }
+/* Cap by height too, so a tall phone screenshot fits on one screen. */
+.markdown-body img { max-width: 100%; max-height: min(60vh, 560px); width: auto; height: auto; vertical-align: top; border: 1px solid var(--borderColor-muted); border-radius: 6px; }
 .markdown-body hr { height: .25em; padding: 0; margin: 24px 0; background: var(--borderColor-default); border: 0; }
 .markdown-body input[type='checkbox'] { margin-right: .4em; }
 .markdown-body .task-list-item { list-style: none; }

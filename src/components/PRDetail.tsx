@@ -50,9 +50,21 @@ export function PRDetail({pr, pendingSession, preview, onDeployPreview, onBack, 
   const buttonCount =
     5 + Number(preview?.state === 'ready' && preview.stale) + Number(Boolean(latestSession)) + Number(Boolean(latestMergeRun))
   const previewIdx = preview?.sha && commits.data ? commits.data.findIndex(c => c.oid === preview.sha) : -1
+  // On phones the action bar is fixed over the page; pad the page by its real height so nothing ends up beneath it.
+  const articleRef = useRef<HTMLElement>(null)
+  const actionsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const actions = actionsRef.current
+    if (!actions) return
+    const observer = new ResizeObserver(() =>
+      articleRef.current?.style.setProperty('--actions-height', `${actions.offsetHeight}px`),
+    )
+    observer.observe(actions)
+    return () => observer.disconnect()
+  }, [])
 
   return (
-    <article className="detail">
+    <article ref={articleRef} className="detail">
       <header className="detail-header">
         <div className="detail-topline">
           <Button className="back-button" variant="invisible" size="small" leadingVisual={ArrowLeftIcon} onClick={onBack}>
@@ -79,6 +91,7 @@ export function PRDetail({pr, pendingSession, preview, onDeployPreview, onBack, 
           </span>
         </div>
         <div
+          ref={actionsRef}
           className="actions"
           data-columns={Math.ceil(buttonCount / 2)}
           style={{'--action-columns': Math.ceil(buttonCount / 2)} as React.CSSProperties}

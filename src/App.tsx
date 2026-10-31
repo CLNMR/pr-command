@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import {Avatar, Flash, IconButton, Spinner} from '@primer/react'
 import {Blankslate} from '@primer/react/experimental'
@@ -316,6 +316,14 @@ function Main({onSignOut}: {onSignOut: () => void}) {
     dialog === null,
   )
 
+  // A new PR starts at its top. On phones the detail pane is the scroller and outlives the PR, so reset it by hand.
+  const detailPaneRef = useRef<HTMLDivElement>(null)
+  const selectedKey = selected?.key
+  useEffect(() => {
+    detailPaneRef.current?.scrollTo({top: 0})
+    window.scrollTo({top: 0})
+  }, [selectedKey])
+
   const showList = !narrow || !selected
   const showDetail = !narrow || selected
 
@@ -361,7 +369,7 @@ function Main({onSignOut}: {onSignOut: () => void}) {
           </div>
         )}
         {showDetail && (
-          <div className="detail-pane">
+          <div ref={detailPaneRef} className="detail-pane">
             {selected ? (
               <PRDetail
                 key={selected.key}

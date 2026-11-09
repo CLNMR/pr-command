@@ -42,7 +42,7 @@ function Row({pr, selected, pending, onSelect}: {pr: PR; selected: boolean; pend
       <span className="pr-row-main">
         <span className="pr-row-title">{pr.title}</span>
         <span className="pr-row-meta">
-          {pr.repo} #{pr.number} · <RelativeTime date={new Date(pr.updatedAt)} /> ·{' '}
+          {pr.repo} #{pr.number} · opened <RelativeTime date={new Date(pr.createdAt)} /> ·{' '}
           <span className="fg-success">+{pr.additions}</span> <span className="fg-danger">−{pr.deletions}</span>
           {(pending || pr.sessions.length > 0) && (
             <span className="pr-row-agent" title="Claude sessions">

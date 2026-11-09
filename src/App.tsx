@@ -189,7 +189,7 @@ function Main({onSignOut}: {onSignOut: () => void}) {
         : [pr]
     })
     const decide = prs.filter(p => p.status === 'open' || p.status === 'attention')
-    // Problems first, then most recently updated (search order).
+    // Problems first, then oldest first (search order).
     decide.sort((a, b) => Number(b.status === 'attention') - Number(a.status === 'attention'))
     return {
       toDecide: decide,

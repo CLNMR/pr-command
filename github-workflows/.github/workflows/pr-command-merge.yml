@@ -1,7 +1,8 @@
 # Merges PRs labeled "ready-to-merge". Clean PRs are merged (or left to native
 # auto-merge while checks run). PRs with conflicts or failing checks get a headless
-# Claude Code agent (subscription via CLAUDE_CODE_OAUTH_TOKEN). After MAX_ATTEMPTS, or
-# when the agent gives up, the PR gets "needs-attention" and a WARNING block at the top
+# Claude Code agent (subscription via CLAUDE_CODE_OAUTH_TOKEN). Between attempts the PR waits
+# a random 30–120 minutes, so that PRs marked mergeable together (whose merges conflict with
+# each other) don't all get fixed at once. After MAX_ATTEMPTS, or when the agent gives up, the PR gets "needs-attention" and a WARNING block at the top
 # of its description.
 #
 # Secrets (org level): CLAUDE_CODE_OAUTH_TOKEN (claude setup-token), PR_COMMAND_TOKEN
@@ -22,7 +23,7 @@ on:
         default: squash
       max_attempts:
         type: number
-        default: 2
+        default: 5
       allowed_users:
         description: Comma-separated PR authors whose PRs the merge agent works on (it runs on their subscription)
         type: string
@@ -186,9 +187,9 @@ jobs:
             # Attempts since the PR was (last) labeled ready-to-merge.
             labeled_at=$(gh api "repos/$R/issues/$n/events" --paginate \
               --jq "[.[] | select(.event == \"labeled\" and .label.name == \"$READY\") | .created_at] | last // empty" | tail -n1)
-            attempts=$(gh api "repos/$R/issues/$n/comments" --paginate \
-              --jq "[.[] | select(.created_at > \"${labeled_at:-0}\" and (.body | contains(\"<!-- pr-command:merge-attempt -->\")))] | length" \
-              | awk '{s += $1} END {print s + 0}')
+            comments=$(gh api "repos/$R/issues/$n/comments" --paginate --jq '.[] | {created_at, body}' \
+              | jq -s --arg since "${labeled_at:-0}" '[.[] | select(.created_at > $since)]')
+            attempts=$(jq '[.[] | select(.body | contains("<!-- pr-command:merge-attempt -->"))] | length' <<<"$comments")
             if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
               attention "$n" "The merge agent tried $attempts times and the PR is still not mergeable.
           - Conflicts: $([ "$mergeable" = CONFLICTING ] && echo yes || echo no)
@@ -196,6 +197,13 @@ jobs:
           - Merge state: $state
 
           See the agent's comments below for what it tried."
+              continue
+            fi
+            # Each finished attempt sets a random retry time (see the fix job's Report step). The
+            # scheduled scan picks the PR up again once it has passed.
+            retry_at=$(jq -r '[.[] | .body | capture("<!-- pr-command:retry-after (?<t>[0-9TZ:-]+) -->") | .t] | last // empty' <<<"$comments")
+            if [ -n "$retry_at" ] && [[ "$(date -u +%Y-%m-%dT%H:%M:%SZ)" < "$retry_at" ]]; then
+              echo "#$n: attempt $attempts failed, next attempt not before $retry_at"
               continue
             fi
             fix+=("$n")
@@ -331,13 +339,16 @@ jobs:
             exit 0
           fi
 
+          # If this attempt doesn't get the PR merged, wait a random 30–120 minutes before the next one.
+          retry_at=$(date -u -d "+$((RANDOM % 91 + 30)) minutes" +%Y-%m-%dT%H:%M:%SZ)
+          marker="<!-- pr-command:retry-after $retry_at -->"
           if [ -n "$summary" ]; then
-            printf '🤖 Merge agent (%s):\n\n%s\n' "$status" "$summary" | gh pr comment "$N" --repo "$R" --body-file -
+            printf '🤖 Merge agent (%s):\n\n%s\n%s\n' "$status" "$summary" "$marker" | gh pr comment "$N" --repo "$R" --body-file -
           else
             # The end of Claude's output says why (e.g. an invalid token or a usage limit).
             error=$(tail -c 600 "$RUNNER_TEMP/claude-output.txt" 2>/dev/null || true)
             {
-              printf '🤖 Merge agent finished without a result (step outcome: %s). It will be retried. [Workflow run](%s)\n' "$OUTCOME" "$RUN_URL"
+              printf '🤖 Merge agent finished without a result (step outcome: %s). It will be retried after %s. [Workflow run](%s)\n%s\n' "$OUTCOME" "$retry_at" "$RUN_URL" "$marker"
               [ -z "$error" ] || printf '\n> Claude: %s\n' "$(tr '\n' ' ' <<<"$error")"
             } | gh pr comment "$N" --repo "$R" --body-file -
             [ -z "$error" ] || echo "::error::Claude: $error"

@@ -314,7 +314,7 @@ export async function fetchViewer(): Promise<Viewer> {
 /** Open PRs by the viewer in the given repos (all org repos if empty). */
 export async function fetchMyPRs(repos: string[]): Promise<PR[]> {
   const scope = repos.length ? repos.map(r => `repo:${ORG}/${r}`).join(' ') : `org:${ORG}`
-  const q = `is:pr is:open author:@me ${scope} archived:false sort:updated-desc`
+  const q = `is:pr is:open author:@me ${scope} archived:false sort:created-asc`
   const data = await gql<{search: {nodes: RawPR[]}}>(
     `query($q: String!) { search(query: $q, type: ISSUE, first: 100) { nodes { ... on PullRequest { ${PR_FIELDS} } } } }`,
     {q},

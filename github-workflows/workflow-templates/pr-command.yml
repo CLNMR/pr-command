@@ -24,9 +24,9 @@ on:
   # The base branch moved: queued PRs may now be behind or conflicting.
   push:
     branches: [$default-branch]
-  # Fallback for anything the events above miss.
+  # Retries the merge agent once its random wait is over, and catches anything the events above miss.
   schedule:
-    - cron: "17 */2 * * *"
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: write

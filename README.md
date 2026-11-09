@@ -19,7 +19,7 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
 
 - **List:** shows your open PRs in the configured repos. The default comes from `VITE_REPOS`
   (`aya`); change it per device with the Repos button (`,`), which is saved in the browser. The "To decide" section puts PRs that need attention
-  first, then sorts by most recently updated. The "Merging" section holds PRs queued to merge.
+  first, then sorts oldest first. The "Merging" section holds PRs queued to merge.
 - **After a decision:** closing or marking a PR mergeable opens the next PR automatically.
   The GitHub calls finish in the background.
 - **Mergeable:**
@@ -28,7 +28,7 @@ Agent (a)      ── workflow_dispatch ─────▶ pr-command.yml ─▶
   2. The label starts the merge workflow. A PR that is clean but not yet merged gets merged.
      A PR behind its base is updated. A PR with conflicts or failing checks gets a headless
      Claude agent, which fixes the problem and pushes; auto-merge then does the rest.
-  3. If the agent gives up, or the PR is still blocked after 2 attempts, it gets the
+  3. If the agent gives up, or the PR is still blocked after 5 attempts (spaced 30–120 minutes apart at random), it gets the
      `needs-attention` label and a `⚠️ WARNING:` block at the top of its description, and it
      goes back to "To decide". Marking it mergeable again removes the block.
   4. **Not mergeable** (`m` on a PR under "Merging") takes it back: it turns off auto-merge,
